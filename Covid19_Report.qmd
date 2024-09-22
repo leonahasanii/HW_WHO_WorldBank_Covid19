@@ -1,0 +1,659 @@
+---
+title: "COVID-19 Pandemic Report"
+author: "Leona Hasani"
+format:   
+  html:                     
+    standalone: true        
+    embed-resources: true   
+    code-fold: true         
+    number-sections: true   
+    message: false
+    css: "style.css"
+---
+
+In this report we will take into consideration two datasets, the dataset of COVID-19 which is collected by the World Health Organization (WHO), this dataset shows the number of new daily cases and new deaths of Covid-19 in most countries in the world. The next dataset is provided by the World Bank Development for most of the countries in the world, which shows some social and economical indicators per each country. 
+
+
+# Contents of this report:
+
+-   [COVID-19 time evolution](#section-1)
+    -   [Covid Cases and Deaths in Germany's 1st wave](#subsection-1-1)
+    -   [Cumulative cases in Germany, Italy, France, and UK](#subsection-1-2)
+    -   [Smoothing daily data](#subsection-1-3)
+    -   [How do deaths follow cases?](#subsection-1-4)
+        -   [Germany](#subsection-1-4-1)
+        -   [Italy](#subsection-1-4-2)
+        -   [Great Britain](#subsection-1-4-3)
+    -   [When does the wave break?](#subsection-1-5)
+-   [World Development Indicators](#section-2)
+    -   [Correlated indicators](#subsection-2-1)
+    -   [Missing values in WDI dataset](#subsection-2-2)
+        -   [First table](#subsection-2-2-1)
+        -   [Second table](#subsection-2-2-2)
+    -   [Principal Component Analysis](#subsection-2-3)
+
+```{r}
+#| label: data
+#| echo: false
+#| message: false
+
+suppressWarnings({
+
+library(tidyverse)
+library(patchwork)
+library(ggplot2)
+library(corrplot)
+
+wdi <- read.csv("C:/Users/Lenovo/Desktop/Data Science Concepts and Tools/hw-COVID19-leonahasanii/data/WDI.csv")
+
+who <- read.csv("C:/Users/Lenovo/Desktop/Data Science Concepts and Tools/hw-COVID19-leonahasanii/data/WHO-COVID-19.csv")
+
+
+who$Date_reported <- as.Date(who$Date_reported)
+
+#Grouping by 4 countries for the cumulative cases
+
+countries <- c("DE", "IT", "FR", "GB")
+covid_countries <- who |>
+  filter(Country_code %in% countries, Date_reported <= as.Date("2020-08-31"))
+
+covid_countries <- covid_countries |>
+  arrange(Country, Date_reported) |>
+  group_by(Country) |>
+  mutate(Cumulative_New_Cases = cumsum(New_cases), Cumulative_New_Deaths = cumsum(New_deaths))
+
+# Smooth function for 3,7 and 10 days
+
+smooth3 <- function(x)
+  {
+  return(1/3 * (x + lag(x, n = 1, default = 0) + lag(x, n = 2, default = 0)))
+  }
+
+smooth7 <- function(x) 
+  {
+  return(1/7 * (x + lag(x, n = 1, default = 0) + lag(x, n = 2, default = 0) + lag(x, n = 3, default = 0) +                               lag(x, n = 4, default = 0) + + lag(x, n = 5, default = 0) + lag(x, n = 6, default = 0)))
+  }
+
+smooth10 <- function(x) 
+  {
+  return(1/10 * (x + lag(x, n = 1, default = 0) + lag(x, n = 2, default = 0) + lag(x, n = 3, default = 0) +
+                     lag(x, n = 4, default = 0) + lag(x, n = 5, default = 0) + lag(x, n = 6, default = 0) +
+                     lag(x, n = 7, default = 0) + lag(x, n = 8, default = 0) + lag(x, n = 9, default = 0)))
+  }
+
+# Creating the new variables for the smooth functions
+
+who1 <- who |>
+  group_by(Country) |>
+  mutate(
+         New_cases_smooth3 = smooth3(New_cases), 
+         New_cases_smooth7 = smooth7(New_cases), 
+         New_cases_smooth10 = smooth10(New_cases),
+         New_deaths_smooth3 = smooth3(New_deaths), 
+         New_deaths_smooth7 = smooth7(New_deaths), 
+         New_deaths_smooth10 = smooth10(New_deaths)
+       )
+
+# Shift-scale function
+
+shiftscale <- function(x, shift, scale)
+                {
+                 lag(x, n=shift, default = 0)*scale
+}
+
+# Renaming the variables of the WDI dataset
+
+wdi1 <- wdi |> 
+  rename("urban_pop" = "Urban.population....of.total.population.",
+         "rural_pop" = "Rural.population....of.total.population.",
+         "pop_lower_haf_medium" = "Proportion.of.people.living.below.50.percent.of.median.income....",
+         "pop" = "Population..total",
+         "pop_older65" = "Population.ages.65.and.above....of.total.population.",
+         "pop_density" = "Population.density..people.per.sq..km.of.land.area.",
+         "physicians_per_1000" = "Physicians..per.1.000.people.",
+         "life_expectancy" = "Life.expectancy.at.birth..total..years.",
+         "gdp_per_capita" = "GDP.per.capita..PPP..current.international...")
+})
+
+```
+
+# <a id="section-1"></a> COVID-19 time evolution
+
+
+## <a id="subsection-1-1"></a> Covid Cases and Deaths in Germany's 1st wave
+
+```{r}
+#| label: Covid Cases and Deaths in Germany's 1st wave
+#glimpse(who)
+
+covid_DE <- who |> filter(Country_code == "DE", Date_reported <= as.Date("2020-08-31")) |>
+   pivot_longer(cols = c("New_cases", "New_deaths"),
+               names_to = "Type",
+               values_to = "Count")
+
+ggplot(data=covid_DE, aes(x = Date_reported, y = Count, color = Type)) +
+  geom_line(linewidth = 0.8) +
+  labs(title = "COVID-19 Cases and Deaths in Germany - 1st Wave",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)",
+       y = "Number of the new cases and deaths",
+       x = "",
+       color = "") +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_color_manual(values = c("New_cases" = "turquoise", "New_deaths" = "red"), 
+                     labels = c("New Covid-19 Cases", "New Covid-19 deaths")) +
+  scale_y_continuous(breaks = seq(0, max(covid_DE$Count), by = 500),
+                     limits = c(0, max(covid_DE$Count))) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"))
+```
+
+### Insights from the timeseries above
+
+What can we observe from the plot above is that the peak of the Covid-19, during the time frame from January 2020 to August 2020, is actually in the second half of March and the begging of April. We should remember that March 2020 was when most of the countries were experiencing the effects of Covid-19 and it was also the time when most of the countries decided to lock down, in order to prevent the spreadness of the pandemic. However, we are more interested in the actual date, when was the peak of the new cases and also deaths in the above time range.
+
+Based on the code that I have provided below, I can that the peak for the new cases and also the deaths was on the 3rd of April 2020, with the new cases at 6549 and the number of deaths had reached 420 people. From the graph, we also could that until April the number of new cases and also deaths was increasing, but however with the restrictions that the government has applied, such as not allowing other gatherings with more than 2 people, applying the social distancing, schools were closed, and other forms of preventing the widespread of the virus. we can see that with these steps or actions that the government had taken, we assume that the cause of why there was being lower new cases and deaths is because of the restriction. Also the fluctuations that we see in the plot, could be caused by the above mentioned, but also another fact could be that more people were being tested and the awareness of protecting our-self first and then the others next was being prioritized during that time.
+
+
+```{r}
+#| label: The date and the peak number of new cases and deaths from Covid19 in Germany
+
+
+cases_data <- covid_DE |>
+  filter(covid_DE$Type == "New_cases") 
+
+peak_cases_index <- which.max(cases_data$Count)
+peak_cases_date <- cases_data$Date_reported[peak_cases_index]
+peak_cases_count <- cases_data$Count[peak_cases_index]
+
+
+death_data <- covid_DE |>
+  filter(covid_DE$Type == "New_deaths") 
+
+peak_death_index <- which.max(death_data$Count)
+peak_death_date <- death_data$Date_reported[peak_death_index]
+peak_death_count <- death_data$Count[peak_death_index]
+```
+
+
+
+## <a id="subsection-1-2"></a> Cumulative cases in Germany, Italy, France, and UK
+
+```{r}
+#| label: Cumulative cases in Germany, Italy, France, and UK
+
+covid_long <- covid_countries |>
+  pivot_longer(cols = c("Cumulative_New_Cases", "Cumulative_New_Deaths"),
+               names_to = "Type",
+               values_to = "Count")
+
+ggplot(data = covid_long, aes(x=Date_reported, y = Count, color = Country)) +
+  geom_line(linewidth = 0.7) +
+  labs(title = "Cumulative COVID-19 Cases and Deaths",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)",
+       x = "",
+       y = "Number of cumulative cases and deaths",
+       color = "Country:") +
+  facet_wrap(~Type, scales = "free_y", nrow = 2) +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  theme_minimal()+
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"))
+
+#wdi22 <- wdi1 |>
+#  filter(country == "Germany" | country == "France"| country == "Italy" | country == "United Kingdom") 
+#  ggplot(data = wdi22, aes(x=country, y= pop_older65)) + geom_col()
+#  ggplot(data = wdi22, aes(x=country, y= pop)) + geom_col()
+
+```
+### Insights from the plots above
+
+The above plots tell us about the cumulative cases and deaths during the Covid-19 pandemic, how they have evolved in the countries such as: Germany, Italy, France and Great Britain. We want to compare and see how they unfolded differently than in Germany. Until the end of August 2020, we can clearly see that in Germany the number of the new cases was lower than in the three other countries. Based on the number of the population, Germany has the highest number of the citizens, so we can infer that the higher the number of population the higher will be also the number of the new cases at first, also the percentage of the population who are older than 65 years older will be less immune than the others which also the chances that they will die in case they're infected with Covid. Italy has the highest percentage on the people who are older than 65, making it more likable that there will be more deaths (from the knowledge we all might know that Italy was having one of the most medical crises during this period, since a lot of people (more older) were in need to be hospitalized and there were not many places in the hospital for them). Another reason, that might have changed the trajectory that how the new cases and death during Covid-19 were evolving in these countries, is how fast these countries have reacted for the social distancing and medical services in order to prevent a pandemic crises. We can see, even though has the highest number of citizens, it outperformed the other countries in the sense of managing a medical crisis.
+
+
+
+## <a id="subsection-1-3"></a> Smoothing daily data
+
+```{r}
+#| label: Smoothing daily data
+
+covid_DE1 <- who1 |> filter(Country_code == "DE", Date_reported <= as.Date("2020-08-31")) |>
+   pivot_longer(cols = c("New_cases_smooth3", "New_cases_smooth7", "New_cases_smooth10", 
+                         "New_deaths_smooth3", "New_deaths_smooth7", "New_deaths_smooth10"),
+               names_to = "Type",
+               values_to = "Count") |>
+  mutate(Type1= ifelse(grepl("New_cases", Type), "Cases", "Deaths"))
+
+ggplot(covid_DE1, aes(x = Date_reported, y = Count, color = Type1)) +
+  geom_line(linewidth = 0.4) +
+  labs(title = "COVID-19 Time Evolution - Smoothed New Cases and Deaths for Germany",
+       x = "",
+       y = "",
+       color = "",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)") +
+  scale_x_date(date_labels = "%b", date_breaks = "2 months") +
+  scale_color_manual(values = c("Cases" = "turquoise", "Deaths" = "red"),
+                     labels = c("Cases" = "New Cases", "Deaths" = "New Deaths")) +
+  facet_wrap(~Type, scales = "free_y", ncol = 3) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"))
+
+
+
+```
+### Insights from the plots above
+
+For the new cases and also the deaths, we are trying to smooth the data, and as we can see the one that smooths the best the curve is the one that takes the average for the 7 days, while it provides a good balance while smoothing the noise and also capturing the trends in our data. The 7-day smooth can be good in smoothing daily noise and also getting the weekly trend. However, in this case it doesn't appear to be applied the rule that the more days we average, the smoother will be the data. Numerous short-term fluctuation sources, including daily differences in testing, reporting, and local epidemics, are frequently present in COVID-19 data. Bigger windows might not be able to capture these quick changes.
+
+## <a id="subsection-1-4"></a> How do deaths follow cases?
+
+### <a id="subsection-1-4-1"></a> Germany 
+
+```{r}
+#| label: How do deaths follow cases
+
+covid_DE2 <- who1 |>
+  filter(Country_code == "DE", Date_reported <= as.Date("2020-08-31")) |>
+  mutate(shiftscale_cases = shiftscale(New_cases_smooth7, shift = 7, scale = 0.0683)) |>
+  pivot_longer(cols = c("shiftscale_cases", "New_deaths_smooth7"),
+               names_to = "Type",
+               values_to = "Counting") 
+
+
+  ggplot(data = covid_DE2,aes(x = Date_reported, y = Counting, color=Type)) +
+  geom_line(linewidth = 0.8)  +
+  labs(title = "Comparison of Shiftscaled Cases and New Deaths in Germany",
+       x = "",
+       y = "",
+       color = "",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)") +
+  scale_x_date(date_labels = "%b %d", date_breaks = "1 month") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"))
+
+
+```
+#### Insights from the plot
+
+Based on the plot of the shiftscale_cases and the new_deaths_smooth7, what we can infer from it is that in Germany in the second part of March where the Covid-19 was at its peak, we can say that it is almost a good predictor that whenever we have a case and we do only like 6.83% of the new cases we will know how many deaths we will have in the next 7 days. So in simpler terms, we can say that 6.83% of the total new cases will predict that how many deaths will be in the next 7 days.
+
+```{r}
+#| label: How do deaths follow cases in Germany from July 2022 to end of the year
+
+
+covid_DE3 <- who1 |>
+  filter(Country_code == "DE", Date_reported >= as.Date("2020-07-01"), Date_reported <= as.Date("2020-12-31")) |>
+  mutate(shiftscale_cases = shiftscale(New_cases_smooth7, shift = 7, scale = 0.0683)) |>
+  pivot_longer(cols = c("shiftscale_cases", "New_deaths_smooth7"),
+               names_to = "Type",
+               values_to = "Counting") 
+
+
+  ggplot(data = covid_DE3,aes(x = Date_reported, y = Counting, color=Type)) +
+  geom_line(linewidth = 0.8)  +
+  labs(title = "Comparison of Shiftscaled Cases and New Deaths in Germany",
+       x = "",
+       y = "",
+       color = "",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)") +
+  scale_x_date(date_labels = "%b %d", date_breaks = "1 month") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"))
+```
+#### Insights from the plot
+
+As we can observe from the plot, the time series seem to not overlap in the time period from 1st July 2020 to the end of the year. We can see that the percentage and also the days which we were using for predicting in the first wave have changed. Here we can assume that the percentage that from the new cases x would deaths is getting lower, and also the number of days is getting higher. 
+
+### <a id="subsection-1-4-2"></a> Italy
+
+```{r}
+#| label: How do deaths follow cases in Italy
+
+covid_IT <- who1 |> filter(Country_code == "IT", Date_reported <= as.Date("2020-08-31")) |>
+    mutate(shiftscale_cases = shiftscale(New_cases_smooth7, shift = 4, scale = 0.144)) |>
+    pivot_longer(cols = c("shiftscale_cases", "New_deaths_smooth7"),
+                 names_to = "Type",
+                 values_to = "Counting") 
+
+ ggplot(data = covid_IT,aes(x = Date_reported, y = Counting, color=Type)) +
+  geom_line(linewidth = 0.8)  +
+  labs(title = "Comparison of Shiftscaled Cases and New Deaths in Italy",
+       x = "",
+       y = "",
+       color = "",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)") +
+  scale_x_date(date_labels = "%b %d", date_breaks = "1 month") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"))
+
+```
+#### Insights from the plot
+
+Based on the plot of the shiftscale_cases and the new_deaths_smooth7, what we can infer from it is that in Italy in the second part of March where the Covid-19 was at its peak, we can say that it is almost a good predictor that whenever we have a case and we do only like 14.4% of the new cases we will know how many deaths we will have in the next 4 days. So in simpler terms, we can say that 14.4% of the total new cases will predict that how many deaths will be in the next 4 days.
+
+### <a id="subsection-1-4-3"></a> Great Britain
+
+```{r}
+#| label: How do deaths follow cases in Great Britain
+
+covid_GB <- who1 |> filter(Country_code == "GB", Date_reported <= as.Date("2020-08-31")) |>
+    mutate(shiftscale_cases = shiftscale(New_cases_smooth7, shift = 4, scale = 0.205)) |>
+    pivot_longer(cols = c("shiftscale_cases", "New_deaths_smooth7"),
+                 names_to = "Type",
+                 values_to = "Counting") 
+
+ ggplot(data = covid_GB,aes(x = Date_reported, y = Counting, color=Type)) +
+  geom_line(linewidth = 0.8)  +
+  labs(title = "Comparison of Shiftscaled Cases and New Deaths in Great Britain",
+       x = "",
+       y = "",
+       color = "",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)") +
+  scale_x_date(date_labels = "%b %d", date_breaks = "1 month") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"))
+```
+#### Insights from the plot
+
+Based on the plot of the shiftscale_cases and the new_deaths_smooth7, what we can infer from it is that in Great Britain in the second part of March where the Covid-19 was at its peak, we can say that it is almost a good predictor that whenever we have a case and we do only like 20.5% of the new cases we will know how many deaths we will have in the next 4 days. So in simpler terms, we can say that 20.5% of the total new cases will predict that how many deaths will be in the next 4 days.
+
+## <a id="subsection-1-5"></a> When does the wave break?
+
+
+```{r, }
+#| label: When does the wave break
+
+covid_DE4 <- who1 |>
+  filter(Country_code =="DE", Date_reported >= as.Date("2020-03-01"), Date_reported <= as.Date("2020-04-15")) |>
+  mutate(Diff_cases_smooth7 = New_cases_smooth7 - lag(New_cases_smooth7, n=1, default=0)) |>
+  pivot_longer(cols = c("Diff_cases_smooth7","New_cases_smooth7"),
+               names_to = "Type",
+               values_to = "Count") |>
+  na.omit()
+
+ggplot(data = covid_DE4, aes(x=Date_reported, y = Count, color = Type)) +
+  geom_line(linewidth = 0.7) +
+  labs(title = "When does the wave break?",
+       caption = "Data about COVID-19 taken from the World Health Organization (WHO)",
+       x = "",
+       y = "",
+       color = "") +
+  facet_wrap(~Type, scales = "free_y", nrow = 2) +
+  scale_x_date(date_labels = "%b %d", date_breaks = "2 days") +
+  theme_minimal()+
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, color = "darkgrey"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+### Insights from the plots above
+
+From the new_cases_smooth7 we can see the number of the new cases per day, but from the diff_cases_smooth7 we can see how the number of the new cases has changed compared to yesterday. The second derivative could be the predictor of when the first wave will break. When we see that the second derivative is decreasing, we can say that the number of new cases is also starting to get slower. We can see that from the beginning of April the number of the new cases has been lower comparing to other days, but from the second derivative we suppose that the end of the wave will be around 10th of April, but then when the number of the new cases. However, the second derivative only suggests the end of a wave, and after some time has passed after that wave, a new wave could be started.
+
+# <a id="section-2"></a> World Development Indicators
+
+## <a id="subsection-2-1"></a> Correlated indicators
+
+```{r}
+#| label: The correlation plot of the WDI
+
+wdi1 |> 
+  select(-country, -iso3c, -region) |> # take out the non-numeric variables
+  cor(use = "pairwise.complete.obs")  |> #it omits any pairs of observations where one or both values are missing 
+  corrplot(method = "color", addCoef.col = "black", tl.col = "black", number.cex = 0.6, tl.cex = 0.6, 
+           col = colorRampPalette(c("turquoise", "white", "coral"))(100))
+
+```
+
+### Insights from the correlation plot
+
+From the correlation matrix we can do the below analysis:
+
+***Variables that are highly correlated*** in this correlation matrix are the physicians per 1000 residents and the life expectancy. What we can infer from this is that the higher the number of the doctors would be in a country the longer people would live. Another highly positive correlation is between gdp per capita and life expectancy, this means that the better the standard of living in a certain country, this will also contribute to the certain person to live more.
+
+All of the other variables that are in the turquoise color are negatively correlated, meaning that when one of the variables increases, the other one decreases, and vice-versa. However, we do not see that from these variables, none of them is highly negatively correlated.
+
+***Two of the variables that are one*** from the correlation matrix are the urban population and the rural population. Only that when one of them is negatively correlated with another variable, than the other one would be positively correlated with that variable. Below, you would also find the same correlation matrix, but in different style.
+
+```{r}
+#| label: The second correlation plot of the WDI
+#| message: false
+
+suppressWarnings({
+  
+library(correlation)
+  
+corrplot <- wdi1 |> 
+  select(-country, -iso3c, -region) |>
+ correlation()
+
+corrplot |>
+  summary(redundant = TRUE) |>
+  plot()
+  
+})
+
+```
+
+## <a id="subsection-2-2"></a> Missing values in WDI dataset
+
+Now we create two other datasets, the first dataset omits all the rows, or we can say countries, that have missing value in some of the variables. Than, for the second dataset we first look that which of the variables or indicators has the most missing values per countries, and we move forward into deciding to delete the two indicators that have most missing values. After deleting them, than we will also omit all the countries that have other missing values in specific indicators.
+
+```{r}
+#| label: XXXXXXXXXXXXXX
+#| echo: false
+
+
+wdi_noNA_small <- na.omit(wdi1)
+
+#summary(wdi1)
+
+wdi_noNA_large <- wdi1 |>
+  select(-pop_lower_haf_medium, - gdp_per_capita) 
+  
+wdi_noNA_large <- na.omit(wdi_noNA_large)
+
+```
+
+The large dataset has `r nrow(wdi_noNA_large)` countries where we first removed the two of the variables (indicators) that have the most NA values then we removed the rest of the countries that were having NA values, then for the small dataset there are `r nrow(wdi_noNA_small)` countries where we only we removed all the countries which were having NA values.
+
+After this we want to see that which are the countries that have more than 1 million population, are in original dataset but are missing in the new datasets that we have created above. For this, we have created two tables, where you can find them below:
+
+```{r}
+#| label: Anti join for two new datasets
+#| echo: false
+
+library(knitr)
+table1 <- wdi1 |>
+  anti_join(wdi_noNA_small, by = "country") |>
+  filter(pop > 1000000)
+
+table2 <- wdi1 |>
+  anti_join(wdi_noNA_large, by = "country") |>
+  filter(pop > 1000000)
+
+```
+
+### <a id="subsection-2-2-1"></a> The table that shows countries with more than 1 million population that are having missing values from the small dataset
+
+```{r}
+#| echo: false
+#| message: false
+#| label: First table for table1
+
+
+options(knitr.kable.NA = "**")
+
+knitr::kable(table1, col.names = gsub("[.]", " ", names(table1)), caption = "Countries with more than 1 million citiziens who have missing data in the wdi_noNA_small dataset", align = "cccccccccccc")
+
+```
+
+### <a id="subsection-2-2-2"></a> The table that shows countries with more than 1 million population that are having missing values from the large dataset
+
+```{r}
+#| echo: false
+#| message: false
+#| label: Second table for table2
+
+
+options(knitr.kable.NA = "**")
+
+knitr::kable(table2, col.names = gsub("[.]", " ", names(table2)), caption = "Countries with more than 1 million citiziens who have missing data in the wdi_noNA_large dataset", align = "cccccccccccc")
+```
+
+
+## <a id="subsection-2-3"></a> Principal Component Analysis
+
+### <a id="subsection-2-3-1"></a> PCA Small
+
+Now, with the small dataset that we have created above, we will do our principal component analysis. Below, you will find the variable loadings and the explained variance for the four first principal components, and also you will see that which countries are identified in the PC1-PC2 plot.
+
+```{r}
+#| label: PCA Small
+
+pca_small <- wdi_noNA_small |>
+  select(-country, -iso3c, -region) |>
+  prcomp(scale = TRUE, center = TRUE)
+
+
+pca_small$rotation |> as_tibble(rownames = "variable") |>
+  pivot_longer(starts_with("PC"), names_to = "PC", values_to = "value") |>
+  filter(PC %in% c("PC1", "PC2", "PC3", "PC4")) |>
+  ggplot(aes(value, variable)) +
+  geom_col() + 
+  geom_vline(xintercept = 0) +
+  facet_wrap(~PC, nrow = 1) +
+  theme_minimal(base_size = 8) 
+
+standard_deviations <- pca_small$sdev
+
+explained_variance <- (standard_deviations^2) / sum(standard_deviations^2)
+
+data <- data.frame(PC = 1:4, Standard_Deviation = standard_deviations[1:4], Explained_Variance = explained_variance[1:4] * 100)
+
+
+ggplot(data, aes(x = factor(PC), y = Explained_Variance)) +
+  geom_bar(stat = "identity", fill = "turquoise", color = "black") +
+  geom_text(aes(label = paste(round(Explained_Variance, 2), "%")), vjust = -0.5, size = 4) +
+  labs(title = "Explained Variance for Principal Components 1 to 4",
+       x = "Principal Components",
+       y = "Explained Variance (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))
+
+```
+#### Insights from the variable loading and plot of PC1-PC2 for the Small Dataset
+
+What we can see or infer from each of the first four principal components is as below:
+
+***First principal component*** as we can see from the variable loading it captures a group of countries that the population is more focused in the rural part than in the urban part of the country, the population seems to be young, the physicians are lower in number, and also the life expectancy is expected to be lower based on the correlation that we had before, and also in this principal component are the countries that have a lower gdp per capita compared to the average of the other countries. In my opinion, I strongly believe that PC1 is presenting the countries that are still in development. We will prove this assumption in the plot of PC1-PC2 where each of the countries are plotted in this. Even from the graph of the explained variance by the first four principal components we can see that PC1 hold the explained variance of the small dataset with 48.74%.
+
+
+***Second principal component*** for the small data set is presenting the countries that have a more likely urban population, but its inhabitants are living below the 50% of the median income. Also the life expectancy, physicians per 100 citizens, and gdp per capita are being lower than comparing to other countries. Also this principal component might give us an idea which countries these might be, but we will leave to check it in the PC1-PC2 plot.
+
+For the other principal components we follow the same idea, as for the first two principal components. 
+
+From the explained variance from the first four principal components we can see that they are responsible for explaining 85% of the small dataset.
+
+Now, let us see how each country is positioned in the PC1-PC2 plot.
+```{r}
+#| label: PC1 PC2 plot for the small dataset
+
+pca_df <- data.frame(
+  PC1 = pca_small$x[, 1],
+  PC2 = pca_small$x[, 2],
+  region = wdi_noNA_small$region,
+  country = wdi_noNA_small$iso3c
+)
+
+pca_df |>
+  ggplot(aes(x = PC1, y = PC2, color = region, label = country)) +
+  geom_text(size = 2.8) +
+  labs(title = "PCA Results: PC1 vs PC2",
+       x = "PC1",
+       y = "PC2") +
+  theme_minimal()
+```
+From this plot of the PC1 and PC2 we can see that countries are more likely to have the above mentioned characteristics from the PC1 are mostly the countries from Sub-Saharan Africa and also the countries that are from Latin America & Caribbean. For the PC2 the countries that are represented more are the countries from Europe and Central Asia mainly and also countries from Latin America & Caribbean.
+
+### <a id="subsection-2-3-2"></a> PCA Large
+
+Now, with the large dataset that we have created above, we will do our principal component analysis. Below, you will find the variable loadings and the explained variance for the four first principal components, and also you will see that which countries are identified in the PC1-PC2 plot.
+
+```{r}
+#| label: PCA Large
+
+pca_large <- wdi_noNA_large |>
+  select(-country, -iso3c, -region) |>
+  prcomp(scale = TRUE, center = TRUE)
+  
+pca_large$rotation |> as_tibble(rownames = "variable") |>
+  pivot_longer(starts_with("PC"), names_to = "PC", values_to = "value") |>
+  filter(PC %in% c("PC1", "PC2", "PC3", "PC4")) |>
+  ggplot(aes(value, variable)) +
+  geom_col() + 
+  geom_vline(xintercept = 0) +
+  facet_wrap(~PC, nrow = 1) +
+  theme_minimal(base_size = 8) 
+
+
+standard_deviations1 <- pca_large$sdev
+
+explained_variance1 <- (standard_deviations1^2) / sum(standard_deviations1^2)
+
+data1 <- data.frame(PC = 1:4, Standard_Deviation = standard_deviations1[1:4], Explained_Variance = explained_variance1[1:4] * 100)
+
+
+ggplot(data1, aes(x = factor(PC), y = Explained_Variance)) +
+  geom_bar(stat = "identity", fill = "turquoise", color = "black") +
+  geom_text(aes(label = paste(round(Explained_Variance, 2), "%")), vjust = -0.5, size = 4) +
+  labs(title = "Explained Variance for Principal Components 1 to 4",
+       x = "Principal Components",
+       y = "Explained Variance (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))
+
+
+```
+
+What we can see or infer from each of the first four principal components is as below:
+
+***First principal component*** as we can see from the variable loading it captures a group of countries that the population is more focused in the urban part than in the rural part of the country, the population seems to be old, the physicians are higher in number, and also the life expectancy is expected to be higher based on the correlation that we had before. In my opinion, I strongly believe that PC1 is presenting the countries that are large developed. We will prove this assumption in the plot of PC1-PC2 where each of the countries are plotted in this. Even from the graph of the explained variance by the first four principal components we can see that PC1 hold the explained variance of the small dataset with 50.22%.
+
+
+***Second principal component*** for the large data set is presenting the countries that have a more likely urban population, the physicians are lower in number, and also the life expectancy is expected to be lower based on the correlation that we had before. Also this principal component might give us an idea which countries these might be, but we will leave to check it in the PC1-PC2 plot.
+
+For the other principal components we follow the same idea, as for the first two principal components. 
+
+From the explained variance from the first four principal components we can see that they are responsible for explaining 92.8% of the large dataset.
+
+Now, let us see how each country is positioned in the PC1-PC2 plot.
+```{r}
+#| label: PC1 PC2 plot for the large dataset
+
+
+pca_df2 <- data.frame(
+  PC1 = pca_large$x[, 1],
+  PC2 = pca_large$x[, 2],
+  region = wdi_noNA_large$region,
+  country = wdi_noNA_large$iso3c
+)
+
+pca_df2 |>
+  ggplot(aes(x = PC1, y = PC2, color = region, label = country)) +
+  geom_text(size = 2.8) +
+  labs(title = "PCA Results: PC1 vs PC2",
+       x = "PC1",
+       y = "PC2") +
+  theme_minimal()
+```
+
+From this plot of the PC1 and PC2 we can see that countries are more likely to have the above mentioned characteristics from the PC1 are mostly the countries from Europe and Central Asia. For the PC2 the countries that are represented more are the countries from Sub-Saharan Africa mainly and also countries from Middle East & North Africa.
+
